@@ -1,3 +1,4 @@
+
 import pkg from 'pg';
 import dotenv from 'dotenv';
 
@@ -8,9 +9,9 @@ const { Pool } = pkg;
 const config = process.env.DATABASE_URL
   ? {
       connectionString: process.env.DATABASE_URL,
-      ssl: process.env.DATABASE_URL.includes('proxy.rlwy.net')
-        ? { rejectUnauthorized: false }
-        : false,
+      ssl: {
+        rejectUnauthorized: false
+      }
     }
   : {
       user: process.env.DB_USER,
@@ -24,6 +25,10 @@ const pool = new Pool(config);
 
 pool.on('connect', () => {
   console.log('Conectado exitosamente a la base de datos PostgreSQL');
+});
+
+pool.on('error', (err) => {
+  console.error('Error inesperado en PostgreSQL:', err);
 });
 
 export default pool;
