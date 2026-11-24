@@ -1,381 +1,416 @@
+// backend/src/controllers/reportController.js
 import pool from '../config/db.js';
+import crypto from 'crypto';
 
-/**
- * Normaliza la categoría enviada desde la interfaz para que coincida con la BD.
- */
-const normalizarTipoReporte = (valor) => {
-  if (!valor) return null;
-  const v = valor.toString().toLowerCase().trim();
+const TIPOS_PERMITIDOS = [
+  'hueco_malla_vial',
+  'alumbrado_publico',
+  'semaforo_averiado',
+  'parques_zonas_verdes',
+  'alcantarillado_fuga'
+];
 
-  if (v.includes('hueco') || v.includes('malla') || v.includes('vial')) {
-    return 'hueco_malla_vial';
-  }
-  if (v.includes('alumbrado') || v.includes('iluminac')) {
-    return 'alumbrado_publico';
-  }
-  if (v.includes('semaforo') || v.includes('semáforo')) {
-    return 'semaforo_averiado';
-  }
-  if (v.includes('parque') || v.includes('verde') || v.includes('arbol')) {
-    return 'parques_zonas_verdes';
-  }
-  if (v.includes('alcantarillado') || v.includes('fuga') || v.includes('agua')) {
-    return 'alcantarillado_fuga';
-  }
+const ESTADOS_PERMITIDOS = [
+  'pendiente',
+  'asignado',
+  'en_proceso',
+  'resuelto',
+  'rechazado'
+];
 
-  return valor;
+const normalizarTexto = (valor) => {
+  if (typeof valor !== 'string') return '';
+  return valor.trim();
 };
 
-// -------------------------------------------------------------------------
-// OBTENER REPORTES (Filtrado según el usuario o rol)
-// -------------------------------------------------------------------------
+const obtenerTipo = (valor) => {
+  const tipo = normalizarTexto(valor).toLowerCase();
+
+  const equivalencias = {
+    'hueco': 'hueco_malla_vial',
+    'malla vial': 'hueco_malla_vial',
+    'huecos en la vía': 'hueco_malla_vial',
+    'alumbrado público': 'alumbrado_publico',
+    'semaforo': 'semaforo_averiado',
+    'semáforo': 'semaforo_averiado',
+    'parques': 'parques_zonas_verdes',
+    'zonas verdes': 'parques_zonas_verdes',
+    'alcantarillado': 'alcantarillado_fuga',
+    'fuga de agua': 'alcantarillado_fuga'
+  };
+
+  return equivalencias[tipo] || tipo;
+};
+
+const obtenerCodigo = () => {
+  return `REP-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+};
+
+const formatearReporte = (fila) => {
+  const codigo = fila.codigo || fila.codigo_reporte || null;
+  const tipo = fila.tipo || fila.categoria || null;
+  const ubicacion = fila.ubicacion_texto || fila.direccion || '';
+
+  return {
+    id: fila.id,
+    codigo,
+    codigo_reporte: codigo,
+    tipo,
+    categoria: fila.categoria || tipo,
+    titulo: fila.titulo || tipo,
+    descripcion: fila.descripcion || '',
+    ubicacion_texto: ubicacion,
+    ubicacion,
+    direccion: fila.direccion || ubicacion,
+    latitud: fila.latitud === null ? null : Number(fila.latitud),
+    longitud: fila.longitud === null ? null : Number(fila.longitud),
+    url_imagen: fila.url_imagen,
+    evidencia: fila.url_imagen,
+    estado: fila.estado,
+    prioridad: fila.prioridad,
+    cuadrilla: fila.cuadrilla,
+    observacion_tecnica: fila.observacion_tecnica,
+    es_duplicado: fila.es_duplicado,
+    creado_en: fila.creado_en,
+    actualizado_en: fila.actualizado_en
+  };
+};
+
+const consultaBase = `
+  SELECT
+    r.id,
+    r.codigo,
+    r.codigo_reporte,
+    r.tipo,
+    r.categoria,
+    r.titulo,
+    r.descripcion,
+    r.ubicacion_texto,
+    r.direccion,
+    r.latitud,
+    r.longitud,
+    r.url_imagen,
+    r.estado,
+    r.prioridad,
+    r.cuadrilla,
+    r.observacion_tecnica,
+    r.es_duplicado,
+    r.creado_en,
+    r.actualizado_en
+  FROM reportes r
+`;
+
+// GET /api/reports
+// Consulta pública. No devuelve datos personales del ciudadano.
 export const getReports = async (req, res) => {
   try {
-    const usuarioId = req.user ? req.user.id : (req.query.ciudadano_id || req.query.citizenId);
-    const rolUsuario = req.user ? req.user.rol : req.query.rol;
-
-    let query = `
-      SELECT 
-        r.id, 
-        r.codigo, 
-        r.tipo, 
-        r.descripcion, 
-        r.ubicacion_texto, 
-        r.latitud,
-        r.longitud,
-        r.url_imagen, 
-        r.estado, 
-        r.prioridad, 
-        r.ciudadano_id, 
-        u.nombre_completo AS ciudadano_nombre,
-        r.creado_en,
-        r.actualizado_en
-       FROM reportes r
-       LEFT JOIN usuarios u ON r.ciudadano_id = u.id
-    `;
-
-    const params = [];
-
-    // Si es un ciudadano autenticado, FILTRAR únicamente por sus propios reportes
-    if (rolUsuario === 'ciudadano' || (!rolUsuario && usuarioId)) {
-      query += ` WHERE r.ciudadano_id = $1`;
-      params.push(usuarioId);
-    }
-
-    query += ` ORDER BY r.creado_en DESC`;
-
-    const result = await pool.query(query, params);
-
-    const reportesFormateados = result.rows.map(r => ({
-      id: r.id,
-      code: r.codigo,
-      codigo: r.codigo,
-      type: r.tipo,
-      tipo: r.tipo,
-      description: r.descripcion,
-      descripcion: r.descripcion,
-      location: r.ubicacion_texto,
-      ubicacionTexto: r.ubicacion_texto,
-      latitud: r.latitud ? parseFloat(r.latitud) : null,
-      longitud: r.longitud ? parseFloat(r.longitud) : null,
-      imageUrl: r.url_imagen,
-      urlImagen: r.url_imagen,
-      status: r.estado,
-      estado: r.estado,
-      priority: r.prioridad,
-      prioridad: r.prioridad,
-      citizenId: r.ciudadano_id,
-      ciudadanoNombre: r.ciudadano_nombre || 'Ciudadano Anónimo',
-      createdAt: r.creado_en,
-      creadoEn: r.creado_en
-    }));
-
-    res.json(reportesFormateados);
-  } catch (error) {
-    console.error('Error al obtener reportes:', error);
-    res.status(500).json({ message: 'Error al consultar reportes en la base de datos' });
-  }
-};
-
-// -------------------------------------------------------------------------
-// OBTENER ÚNICAMENTE MIS REPORTES (Para la cuenta logueada)
-// -------------------------------------------------------------------------
-export const getMisReportes = async (req, res) => {
-  try {
-    const usuarioId = req.user ? req.user.id : (req.query.ciudadano_id || req.query.citizenId);
-
-    if (!usuarioId) {
-      return res.json([]);
-    }
-
-    const result = await pool.query(
-      `SELECT 
-        r.id, 
-        r.codigo, 
-        r.tipo, 
-        r.descripcion, 
-        r.ubicacion_texto, 
-        r.latitud,
-        r.longitud,
-        r.url_imagen, 
-        r.estado, 
-        r.prioridad, 
-        r.ciudadano_id, 
-        u.nombre_completo AS ciudadano_nombre,
-        r.creado_en,
-        r.actualizado_en
-       FROM reportes r
-       LEFT JOIN usuarios u ON r.ciudadano_id = u.id
-       WHERE r.ciudadano_id = $1
-       ORDER BY r.creado_en DESC`,
-      [usuarioId]
+    const resultado = await pool.query(
+      `${consultaBase}
+       ORDER BY r.creado_en DESC`
     );
 
-    const reportesFormateados = result.rows.map(r => ({
-      id: r.id,
-      code: r.codigo,
-      codigo: r.codigo,
-      type: r.tipo,
-      tipo: r.tipo,
-      description: r.descripcion,
-      descripcion: r.descripcion,
-      location: r.ubicacion_texto,
-      ubicacionTexto: r.ubicacion_texto,
-      latitud: r.latitud ? parseFloat(r.latitud) : null,
-      longitud: r.longitud ? parseFloat(r.longitud) : null,
-      imageUrl: r.url_imagen,
-      urlImagen: r.url_imagen,
-      status: r.estado,
-      estado: r.estado,
-      priority: r.prioridad,
-      prioridad: r.prioridad,
-      citizenId: r.ciudadano_id,
-      ciudadanoNombre: r.ciudadano_nombre || 'Ciudadano Anónimo',
-      createdAt: r.creado_en,
-      creadoEn: r.creado_en
-    }));
-
-    res.json(reportesFormateados);
+    return res.json({
+      reports: resultado.rows.map(formatearReporte)
+    });
   } catch (error) {
-    console.error('Error al obtener mis reportes:', error);
-    res.status(500).json({ message: 'Error al consultar tus reportes' });
+    console.error('Error consultando reportes:', error.message);
+
+    return res.status(500).json({
+      message: 'No fue posible consultar los reportes.'
+    });
   }
 };
 
-// -------------------------------------------------------------------------
-// CREAR UN NUEVO REPORTE (Soporte para FormData / Multer)
-// -------------------------------------------------------------------------
-export const createReport = async (req, res) => {
-  const { 
-    tipo, type, categoria, 
-    descripcion, description, 
-    ubicacion_texto, locationText, location, 
-    latitud, latitude, lat, 
-    longitud, longitude, lng, 
-    url_imagen, imageUrl, imagenUrl, 
-    ciudadano_id, citizenId 
-  } = req.body;
-
-  let archivoUrlFinal = null;
-  if (req.file) {
-    archivoUrlFinal = `/${req.file.path.replace(/\\/g, '/')}`;
-  } else {
-    archivoUrlFinal = url_imagen || imageUrl || imagenUrl;
-  }
-
-  const tipoBruto = tipo || type || categoria;
-  const tipoFinal = normalizarTipoReporte(tipoBruto);
-  const descripcionFinal = (descripcion || description || '').trim();
-  const ubicacionFinal = (ubicacion_texto || locationText || location || '').trim();
-  
-  let ciudadanoIdFinal = (req.user && req.user.id) ? req.user.id : (ciudadano_id || citizenId || null);
-
-  const latitudFinal = (latitud || latitude || lat) ? parseFloat(latitud || latitude || lat) : null;
-  const longitudFinal = (longitud || longitude || lng) ? parseFloat(longitud || longitude || lng) : null;
-
-  if (!tipoFinal) {
-    return res.status(400).json({ message: 'El tipo de reporte enviado no es válido o está ausente.' });
-  }
-
-  if (!ubicacionFinal) {
-    return res.status(400).json({ message: 'La ubicación exacta del problema es obligatoria.' });
-  }
-
-  if (!archivoUrlFinal) {
-    return res.status(400).json({ message: 'La imagen, video o evidencia del reporte es obligatoria.' });
-  }
-
-  // GENERACIÓN DE CÓDIGO EN NODE.JS
-  const codigoGenerado = 'REP-' + Math.floor(100000 + Math.random() * 900000);
-
+// GET /api/reports/mine
+// Consulta privada del ciudadano autenticado.
+export const getMisReportes = async (req, res) => {
   try {
-    const result = await pool.query(
+    const resultado = await pool.query(
+      `${consultaBase}
+       WHERE r.ciudadano_id = $1
+       ORDER BY r.creado_en DESC`,
+      [req.user.id]
+    );
+
+    return res.json({
+      reports: resultado.rows.map(formatearReporte)
+    });
+  } catch (error) {
+    console.error('Error consultando reportes del usuario:', error.message);
+
+    return res.status(500).json({
+      message: 'No fue posible consultar tus reportes.'
+    });
+  }
+};
+
+// POST /api/reports
+// El ciudadano se toma exclusivamente del token, nunca del formulario.
+export const createReport = async (req, res) => {
+  try {
+    const tipo = obtenerTipo(
+      req.body.tipo ?? req.body.type ?? req.body.categoria
+    );
+
+    const descripcion = normalizarTexto(
+      req.body.descripcion ?? req.body.description
+    );
+
+    const ubicacion = normalizarTexto(
+      req.body.ubicacion_texto ??
+      req.body.location ??
+      req.body.direccion
+    );
+
+    const latitudTexto = req.body.latitud ?? req.body.lat;
+    const longitudTexto = req.body.longitud ?? req.body.lng;
+
+    const latitud = latitudTexto === undefined || latitudTexto === ''
+      ? null
+      : Number(latitudTexto);
+
+    const longitud = longitudTexto === undefined || longitudTexto === ''
+      ? null
+      : Number(longitudTexto);
+
+    if (!TIPOS_PERMITIDOS.includes(tipo)) {
+      return res.status(400).json({
+        message: 'El tipo de reporte seleccionado no es válido.'
+      });
+    }
+
+    if (!descripcion || descripcion.length < 10) {
+      return res.status(400).json({
+        message: 'La descripción debe tener al menos 10 caracteres.'
+      });
+    }
+
+    if (descripcion.length > 5000) {
+      return res.status(400).json({
+        message: 'La descripción es demasiado larga.'
+      });
+    }
+
+    if (!ubicacion || ubicacion.length > 500) {
+      return res.status(400).json({
+        message: 'Debes indicar una ubicación válida.'
+      });
+    }
+
+    if (
+      latitud !== null &&
+      (!Number.isFinite(latitud) || latitud < -90 || latitud > 90)
+    ) {
+      return res.status(400).json({
+        message: 'La latitud no es válida.'
+      });
+    }
+
+    if (
+      longitud !== null &&
+      (!Number.isFinite(longitud) || longitud < -180 || longitud > 180)
+    ) {
+      return res.status(400).json({
+        message: 'La longitud no es válida.'
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        message: 'Debes adjuntar una fotografía o video como evidencia.'
+      });
+    }
+
+    const codigo = obtenerCodigo();
+    const urlImagen = `/uploads/${req.file.filename}`;
+
+    const resultado = await pool.query(
       `INSERT INTO reportes (
         codigo,
-        tipo, 
-        descripcion, 
-        ubicacion_texto, 
-        latitud, 
-        longitud, 
-        url_imagen, 
+        codigo_reporte,
+        tipo,
+        descripcion,
+        ubicacion_texto,
+        latitud,
+        longitud,
+        url_imagen,
         ciudadano_id
-      ) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
-      RETURNING 
-        id, 
-        codigo, 
-        tipo, 
-        descripcion, 
-        ubicacion_texto, 
-        latitud, 
-        longitud, 
-        url_imagen, 
-        estado, 
-        prioridad, 
-        ciudadano_id, 
-        creado_en`,
+      )
+      VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING
+        id,
+        codigo,
+        codigo_reporte,
+        tipo,
+        categoria,
+        titulo,
+        descripcion,
+        ubicacion_texto,
+        direccion,
+        latitud,
+        longitud,
+        url_imagen,
+        estado,
+        prioridad,
+        cuadrilla,
+        observacion_tecnica,
+        es_duplicado,
+        creado_en,
+        actualizado_en`,
       [
-        codigoGenerado,
-        tipoFinal, 
-        descripcionFinal, 
-        ubicacionFinal, 
-        latitudFinal, 
-        longitudFinal, 
-        archivoUrlFinal, 
-        ciudadanoIdFinal
+        codigo,
+        tipo,
+        descripcion,
+        ubicacion,
+        latitud,
+        longitud,
+        urlImagen,
+        req.user.id
       ]
     );
 
-    const r = result.rows[0];
-
-    res.status(201).json({
-      id: r.id,
-      code: r.codigo,
-      codigo: r.codigo,
-      type: r.tipo,
-      tipo: r.tipo,
-      description: r.descripcion,
-      descripcion: r.descripcion,
-      location: r.ubicacion_texto,
-      ubicacionTexto: r.ubicacion_texto,
-      latitud: r.latitud ? parseFloat(r.latitud) : null,
-      longitud: r.longitud ? parseFloat(r.longitud) : null,
-      imageUrl: r.url_imagen,
-      urlImagen: r.url_imagen,
-      status: r.estado,
-      estado: r.estado,
-      priority: r.prioridad,
-      prioridad: r.prioridad,
-      citizenId: r.ciudadano_id,
-      createdAt: r.creado_en,
-      creadoEn: r.creado_en
+    return res.status(201).json({
+      message: 'Reporte creado correctamente.',
+      report: formatearReporte(resultado.rows[0])
     });
-
   } catch (error) {
-    console.error('Error detallado de PostgreSQL al crear reporte:', error);
-
-    if (error.code === '23503') {
-      return res.status(400).json({ 
-        message: 'El usuario asociado al reporte no existe en la base de datos.' 
-      });
-    }
-
-    if (error.code === '23502') {
-      return res.status(400).json({ 
-        message: `Falta completar un campo obligatorio en la base de datos (${error.column}).` 
-      });
-    }
+    console.error('Error creando reporte:', error.message);
 
     if (error.code === '22P02') {
-      return res.status(400).json({ 
-        message: 'El tipo de reporte enviado no existe en la categoría permitida.' 
+      return res.status(400).json({
+        message: 'Uno de los valores enviados no es válido.'
       });
     }
 
-    res.status(500).json({ 
-      message: 'Error al registrar el reporte en la base de datos',
-      detail: error.message 
+    if (error.code === '23503') {
+      return res.status(400).json({
+        message: 'No se pudo asociar el reporte con tu cuenta.'
+      });
+    }
+
+    return res.status(500).json({
+      message: 'No fue posible crear el reporte.'
     });
   }
 };
 
-// -------------------------------------------------------------------------
-// ACTUALIZAR ESTADO DE UN REPORTE (Uso exclusivo Gestores / Entidades)
-// -------------------------------------------------------------------------
+// PATCH /api/reports/:id/status
+// La ruta ya exige rol entidad o administrador.
+// Además, una entidad solo puede actualizar reportes de su entidad.
 export const updateReportStatus = async (req, res) => {
-  const { id } = req.params;
-  const { estado, status, cuadrilla, observacion_tecnica, observacion, nota } = req.body;
-
-  const estadoRecibido = estado || status;
-  const cuadrillaRecibida = cuadrilla || null;
-  const observacionRecibida = observacion_tecnica || observacion || nota || null;
-
-  if (!estadoRecibido) {
-    return res.status(400).json({ message: 'El nuevo estado del reporte es requerido.' });
-  }
-
-  // 1. Mapear y normalizar el estado al tipo ENUM de PostgreSQL
-  let estadoNormalizado = estadoRecibido.toString().toLowerCase().trim();
-  
-  if (estadoNormalizado.includes('proceso')) {
-    estadoNormalizado = 'en_proceso';
-  } else if (estadoNormalizado.includes('resuelto')) {
-    estadoNormalizado = 'resuelto';
-  } else if (estadoNormalizado.includes('rechazad')) {
-    estadoNormalizado = 'rechazado';
-  } else if (estadoNormalizado.includes('asignad')) {
-    estadoNormalizado = 'asignado';
-  } else if (estadoNormalizado.includes('pendien')) {
-    estadoNormalizado = 'pendiente';
-  }
-
-  console.log(`=== INTENTANDO ACTUALIZAR REPORTE PARAM: ${id} ===`);
-  console.log(`Estado procesado: ${estadoNormalizado}`);
-
   try {
-    // Permite buscar tanto por ID numérico como por código de reporte (ej. REP-702972)
-    const isNumericId = !isNaN(Number(id));
+    const id = String(req.params.id || '').trim();
+    const estado = normalizarTexto(
+      req.body.estado ?? req.body.status
+    ).toLowerCase();
 
-    let query = `
-      UPDATE reportes 
-      SET estado = $1::text::estado_reporte, 
-          cuadrilla = COALESCE($2, cuadrilla), 
-          observacion_tecnica = COALESCE($3, observacion_tecnica),
-          actualizado_en = NOW()
-      WHERE ${isNumericId ? 'id = $4 OR codigo = $5' : 'codigo = $4 OR codigo_reporte = $4'}
-      RETURNING *
-    `;
+    const observacion = normalizarTexto(
+      req.body.observacion_tecnica ?? req.body.observacion ?? ''
+    );
 
-    const queryParams = isNumericId 
-      ? [estadoNormalizado, cuadrillaRecibida, observacionRecibida, Number(id), String(id)]
-      : [estadoNormalizado, cuadrillaRecibida, observacionRecibida, String(id)];
+    const cuadrilla = normalizarTexto(req.body.cuadrilla ?? '');
 
-    const result = await pool.query(query, queryParams);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'El reporte no existe en la base de datos.' });
+    if (!id) {
+      return res.status(400).json({
+        message: 'Debes indicar el reporte que deseas actualizar.'
+      });
     }
 
-    const r = result.rows[0];
-    console.log(`✅ Reporte ${r.id} (${r.codigo}) actualizado correctamente a "${r.estado}"`);
+    if (!ESTADOS_PERMITIDOS.includes(estado)) {
+      return res.status(400).json({
+        message: 'El estado indicado no es válido.'
+      });
+    }
 
-    return res.status(200).json({
-      message: 'Estado del reporte actualizado exitosamente',
-      report: {
-        id: r.id,
-        codigo: r.codigo || r.codigo_reporte,
-        estado: r.estado,
-        cuadrilla: r.cuadrilla,
-        observacionTecnica: r.observacion_tecnica,
-        actualizadoEn: r.actualizado_en
+    let entidadId = null;
+
+    if (req.user.rol === 'entidad') {
+      const usuario = await pool.query(
+        'SELECT entidad_id FROM usuarios WHERE id = $1 AND estado = $2',
+        [req.user.id, 'activo']
+      );
+
+      if (
+        usuario.rowCount === 0 ||
+        usuario.rows[0].entidad_id === null
+      ) {
+        return res.status(403).json({
+          message: 'Tu cuenta no tiene una entidad asignada.'
+        });
       }
-    });
 
+      entidadId = usuario.rows[0].entidad_id;
+    }
+
+    const esNumerico = /^\d+$/.test(id);
+
+    const valores = [
+      estado,
+      cuadrilla || null,
+      observacion || null
+    ];
+
+    let condicionIdentificador;
+    if (esNumerico) {
+      valores.push(id);
+      condicionIdentificador = `id = $${valores.length}`;
+    } else {
+      valores.push(id);
+      condicionIdentificador = `(codigo = $${valores.length} OR codigo_reporte = $${valores.length})`;
+    }
+
+    let condicionEntidad = '';
+    if (entidadId !== null) {
+      valores.push(entidadId);
+      condicionEntidad = ` AND entidad_id = $${valores.length}`;
+    }
+
+    const resultado = await pool.query(
+      `UPDATE reportes
+       SET
+         estado = $1::estado_reporte,
+         cuadrilla = COALESCE($2, cuadrilla),
+         observacion_tecnica = COALESCE($3, observacion_tecnica),
+         actualizado_en = NOW()
+       WHERE ${condicionIdentificador}${condicionEntidad}
+       RETURNING
+         id,
+         codigo,
+         codigo_reporte,
+         tipo,
+         categoria,
+         titulo,
+         descripcion,
+         ubicacion_texto,
+         direccion,
+         latitud,
+         longitud,
+         url_imagen,
+         estado,
+         prioridad,
+         cuadrilla,
+         observacion_tecnica,
+         es_duplicado,
+         creado_en,
+         actualizado_en`,
+      valores
+    );
+
+    if (resultado.rowCount === 0) {
+      return res.status(404).json({
+        message: 'No se encontró el reporte o no pertenece a tu entidad.'
+      });
+    }
+
+    return res.json({
+      message: 'Estado del reporte actualizado correctamente.',
+      report: formatearReporte(resultado.rows[0])
+    });
   } catch (error) {
-    console.error('❌ Error detallado de PostgreSQL:', error.message);
-    return res.status(500).json({ 
-      message: 'Error interno al actualizar el estado del reporte en la base de datos.',
-      detail: error.message 
+    console.error('Error actualizando reporte:', error.message);
+
+    return res.status(500).json({
+      message: 'No fue posible actualizar el estado del reporte.'
     });
   }
 };

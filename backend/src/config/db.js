@@ -1,34 +1,27 @@
-
-import pkg from 'pg';
+// backend/src/config/db.js
+import pg from 'pg';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const { Pool } = pkg;
+const { Pool } = pg;
 
-const config = process.env.DATABASE_URL
-  ? {
-      connectionString: process.env.DATABASE_URL,
-      ssl: {
-        rejectUnauthorized: false
-      }
-    }
-  : {
-      user: process.env.DB_USER,
-      host: process.env.DB_HOST,
-      database: process.env.DB_NAME,
-      password: process.env.DB_PASSWORD,
-      port: process.env.DB_PORT || 5432,
-    };
+if (!process.env.DATABASE_URL) {
+  throw new Error('No está configurada la variable DATABASE_URL.');
+}
 
-const pool = new Pool(config);
-
-pool.on('connect', () => {
-  console.log('Conectado exitosamente a la base de datos PostgreSQL');
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  },
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000
 });
 
-pool.on('error', (err) => {
-  console.error('Error inesperado en PostgreSQL:', err);
+pool.on('error', (error) => {
+  console.error('Error inesperado en la conexión PostgreSQL:', error.message);
 });
 
 export default pool;

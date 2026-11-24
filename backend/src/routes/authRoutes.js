@@ -1,12 +1,17 @@
+// backend/src/routes/authRoutes.js
 import express from 'express';
-import { registerUser, loginUser, resetAdminPassword } from '../controllers/authController.js';
+import {
+  registerUser,
+  loginUser,
+  getProfile
+} from '../controllers/authController.js';
+
+import { verificarToken } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
 router.post('/register', registerUser);
 router.post('/login', loginUser);
-
-// Ruta temporal para actualizar las claves con bcrypt nativo
-router.get('/reset-passwords', resetAdminPassword);
+router.get('/me', verificarToken, getProfile);
 
 export default router;
